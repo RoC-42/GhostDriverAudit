@@ -1,7 +1,6 @@
 # GhostDriverAudit (GDA)
 A PowerShell script that checks Windows 11 installations for orphaned drivers
 
-==========
 DISCLAIMER: Use at your own risk!
 This script operates deep inside Windows 11 OS, and may lead to a situation where i.e. the PC does not respond anymore.
 In this case the Windows recovery environment (WinPE) must be loaded and a restore point must be restored.
@@ -24,3 +23,12 @@ The output will be a list from which all original Microsoft / Windows 11 drivers
 All other entries do have entries in the registry, but no physical driver files to load, or they have physical files and a registry entry, but are not in use.
 The user can then go through the list 1 by 1 and will be asked whether or not to delete the respective driver entry.
 Afterwards, the PC must be rebooted.
+
+How to use
+==========
+1) Copy the code into a file and name it .ps1 (Windows PowerShell). i.E. "GDA.ps1"
+2) Optional / Ideally: Move the file to C:\
+3) Start Windows PowerShell as an Administrator
+4) Type .\GDA.ps1 to run the script
+5) Follow the instructions
+6) Reboot PC (the script will tell you when to do so)
