@@ -1,4 +1,4 @@
-title GhostDriverAudit v1 for WIN11 25H2 | Build 260524 by RoC-42 (GPL v3)
+title GhostDriverAudit v1 for WIN11 25H2 | Build 260524_2 by RoC-42 (GPL v3)
 
 # 1. Enforce Administrator Rights
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -8,7 +8,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 Clear-Host
 Write-Output "========================================================="
-Write-Output "    INTELLIGENT AUDIT, BACKUP & INTERACTIVE FIX SYSTEM (V4.1)"
+Write-Output "    INTELLIGENT AUDIT, BACKUP & INTERACTIVE FIX SYSTEM (V4.3)"
 Write-Output "========================================================="
 
 # -----------------------------------------------------------------
@@ -38,19 +38,28 @@ try {
 }
 
 # -----------------------------------------------------------------
-# SETUP VARIABLES & EXPANDED MICROSOFT IGNORE LIST
+# SETUP VARIABLES & EXPANDED IGNORE LIST (OS + BACKUP SOFTWARE)
 # -----------------------------------------------------------------
 $detectedServices = @()
 $detectedClassFilters = @()
 $detectedEnumFilters = @()
 
-# Comprehensive list of native Windows filters to completely bypass
+# Comprehensive list of native Windows + trusted Backup filters to completely bypass
 $msFilters = @(
+    # Core OS Filters
     "kbdclass", "mouclass", "vdrvroot", "volmgr", "fltsrv", "partmgr", 
     "rawwan", "ndis", "umpass", "rdpinput", "cdrom", "disk", "fvevol", 
     "pci", "acpi", "volmgrx", "tdx", "netvsc", "luafv", "iorate", "rdyboost",
     "volsnap", "ksthunk", "ehstorclass", "scfilter", "wpdupfltr", "wdmcompanionfilter",
-    "pciidex", "intelpep", "spaceport", "sercx2", "bthpan"
+    "pciidex", "intelpep", "spaceport", "sercx2", "bthpan",
+    # Acronis Backup
+    "file_protector", "tib_mounter", "fltsrv", "vidsflt", "tdrpman", "snapman",
+    # AOMEI Backup
+    "ambakdrv", "ammntdrv", "amlnk", "amwrtdrv",
+    # Macrium Reflect
+    "mrcbt", "mrflt", "vssmft",
+    # Veeam
+    "veeamsnap"
 )
 
 $coreClasses = @{
@@ -58,14 +67,30 @@ $coreClasses = @{
     "{4D36E96F-E325-11CE-BFC1-08002BE10318}" = "mouclass"
 }
 
-# Helper function to check if a driver file belongs to Microsoft
-function Is-MicrosoftDriver ($driverName) {
+# Helper function to check if a driver file belongs to Microsoft or trusted backup suites
+function Is-TrustedDriver ($driverName) {
     $sysPath = "C:\Windows\System32\drivers\$driverName.sys"
     if (-not (Test-Path $sysPath)) { return $false }
+    
+    # 1. Check digital certificate signatures
     $signature = Get-AuthenticodeSignature $sysPath -ErrorAction SilentlyContinue
-    if ($signature.SignerCertificate.Subject -match "Microsoft Windows") { return $true }
+    $subject = $signature.SignerCertificate.Subject
+    if ($subject -match "Microsoft Windows" -or 
+        $subject -match "Acronis" -or 
+        $subject -match "AOMEI" -or 
+        $subject -match "Paramount Software") { 
+        return $true 
+    }
+    
+    # 2. Fallback check via File Metadata Company Name
     $company = (Get-Item $sysPath).VersionInfo.CompanyName
-    if ($company -match "Microsoft") { return $true }
+    if ($company -match "Microsoft" -or 
+        $company -match "Acronis" -or 
+        $company -match "AOMEI" -or 
+        $company -match "Macrium") { 
+        return $true 
+    }
+    
     return $false
 }
 
@@ -87,8 +112,10 @@ Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services" | ForEach-Object {
         if ($cleanPath -notmatch "^[A-Z]:") { $cleanPath = "C:\Windows\System32\drivers\$cleanPath" }
 
         if (-not (Test-Path $cleanPath)) {
-            Write-Output "[!] Found: Service '$name' references a missing file."
-            $detectedServices += ,[PSCustomObject]@{ ServiceName = $name; FilePath = $cleanPath }
+            if ($msFilters -notcontains $name.ToLower()) {
+                Write-Output "[!] Found: Service '$name' references a missing file."
+                $detectedServices += ,[PSCustomObject]@{ ServiceName = $name; FilePath = $cleanPath }
+            }
         }
     }
 }
@@ -108,7 +135,7 @@ Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Class" | ForEach-Obj
         if ($filters) {
             foreach ($f in $filters) {
                 if ($msFilters -notcontains $f.ToLower()) {
-                    if (-not (Is-MicrosoftDriver $f)) {
+                    if (-not (Is-TrustedDriver $f)) {
                         Write-Output "[?] Found: Class '$className' uses filter '$f' ($filterType)"
                         $detectedClassFilters += ,[PSCustomObject]@{ ClassGuid = $classGuid; FilterType = $filterType; FilterName = $f; ClassName = $className }
                     }
@@ -135,7 +162,7 @@ foreach ($sub in @("USB", "HID", "PCI")) {
                 if ($filters) {
                     foreach ($f in $filters) {
                         if ($msFilters -notcontains $f.ToLower()) {
-                            if (-not (Is-MicrosoftDriver $f)) {
+                            if (-not (Is-TrustedDriver $f)) {
                                 Write-Output "[?] Found: Instance '$sub\$deviceName' uses filter '$f' ($filterType)"
                                 $detectedEnumFilters += ,[PSCustomObject]@{ RegPath = $regPath; FilterType = $filterType; FilterName = $f; DeviceName = $deviceName }
                             }
@@ -226,11 +253,18 @@ if ($detectedEnumFilters.Count -gt 0) {
     }
 }
 
-# 2.4 Force Memory Integrity Refresh
-Write-Output "`n[+] Enforcing final update trigger for Core Isolation (Memory Integrity)..."
-$hvciPath = "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity"
-if (-not (Test-Path $hvciPath)) { New-Item -Path $hvciPath -Force | Out-Null }
-Set-ItemProperty -Path $hvciPath -Name "Enabled" -Value 1 -PropertyType DWORD -Force
+# 2.4 Optional Core Isolation Activation
+Write-Output "`n--- Core Isolation Configuration ---"
+$enableHvci = Read-Host "Do you want to enforce Core Isolation (Memory Integrity) enablement now? (y/n)"
+if ($enableHvci -eq "y") {
+    Write-Output "[+] Enforcing final update trigger for Core Isolation (Memory Integrity)..."
+    $hvciPath = "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity"
+    if (-not (Test-Path $hvciPath)) { New-Item -Path $hvciPath -Force | Out-Null }
+    Set-ItemProperty -Path $hvciPath -Name "Enabled" -Value 1 -PropertyType DWORD -Force
+    Write-Output "   [+] Core Isolation forced via Registry."
+} else {
+    Write-Output "[-] Core Isolation configuration left untouched."
+}
 
 Write-Output "`n========================================================="
 Write-Output " PROCESS COMPLETED. Please restart your PC now."
